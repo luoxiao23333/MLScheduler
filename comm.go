@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var schedulerPort = ":8081"
 var objectDetectionCMD = "python test.py"
 
-var taskCompletedNotifier map[int]chan TaskInfo
+// type: map[int]chan TaskInfo
+var taskCompletedNotifier sync.Map
 
 func RunHttpServer() {
 	http.HandleFunc("/task_end", taskEnd)
@@ -39,21 +42,22 @@ func workerRegister(w http.ResponseWriter, r *http.Request) {
 
 func taskEnd(w http.ResponseWriter, r *http.Request) {
 	taskInfo := &TaskInfo{}
-	var rawData []byte
-	_, err := r.Body.Read(rawData)
+	rawData, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Panic("Http Read Failed")
+		log.Panicf("Http Read Failed: %v", err)
 	}
 
 	err = json.Unmarshal(rawData, taskInfo)
 	if err != nil {
-		log.Panic("Json Unmarshal Failed")
+		log.Panicf("Json Unmarshal Failed: %v\nraw data: %v", err, string(rawData))
 	}
 
-	taskCompletedNotifier[taskInfo.TaskID] <- *taskInfo
+	taskChan, _ := taskCompletedNotifier.Load(taskInfo.TaskID)
+	taskChan.(chan TaskInfo) <- *taskInfo
+
 	_, err = w.Write([]byte(fmt.Sprint("Receive! Scheduler known task ", taskInfo.TaskID, " Done!")))
 	if err != nil {
-		log.Panic("Http Write Failed")
+		log.Panicf("Http Write Failed: %v", err)
 	}
 }
 
@@ -61,37 +65,47 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Query()
 	task := param.Get("task")
 	// Expected or Minimum Resource Requirement
-	cpu := param.Get("cpu")
-	mem := param.Get("mem")
+	cpu, err := strconv.Atoi(param.Get("cpu"))
+	mem, err := strconv.Atoi(param.Get("mem"))
+	if err != nil {
+		log.Panic(err)
+	}
+
 	taskID := GetUniqueID()
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	workerURL := WorkerURLPool[taskID%len(WorkerURLPool)].GetURL()
+	workerURL := WorkerURLPool[taskID%len(WorkerURLPool)].GetURL("run_task")
 
-	if len(task) == 0 || len(cpu) == 0 || len(mem) == 0 {
-		_, err := w.Write([]byte("Un Complete Params!"))
+	if len(task) == 0 {
+		_, err = w.Write([]byte("Un Complete Params!"))
 		if err != nil {
 			log.Panic(err)
 		}
 	}
 
 	if task == "object_detection" {
-		urlString := fmt.Sprintf("%v/run_task?command=%v&cpu=%v&mem=%v&id=%v",
-			workerURL, objectDetectionCMD, cpu, mem, taskID)
+		taskSubmissionInfo := &TaskSubmissionInfo{
+			CPU:     cpu,
+			Mem:     mem,
+			Command: objectDetectionCMD,
+			ID:      taskID,
+		}
 
-		log.Println("Execute: ", urlString)
-
-		rep, err := http.DefaultClient.Get(urlString)
+		marshal, err := json.Marshal(taskSubmissionInfo)
 		if err != nil {
 			log.Panic(err)
 		}
 
-		var rawData []byte
-		err = rep.Write(bytes.NewBuffer(rawData))
+		log.Printf("submit to %v, with info: %v", workerURL, taskSubmissionInfo)
+
+		rep, err := http.DefaultClient.Post(workerURL, "application/json",
+			bytes.NewReader(marshal))
 		if err != nil {
-			return
+			log.Panic(err)
 		}
+
+		rawData, err := io.ReadAll(rep.Body)
 		if err != nil {
 			log.Panic(err)
 		}
@@ -103,15 +117,28 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 		log.Println("Task has been sent with id = ", taskID)
 
-		taskCompletedNotifier[taskID] = make(chan TaskInfo, 1)
+		taskChan := make(chan TaskInfo, 1)
+		taskCompletedNotifier.Store(taskID, taskChan)
+		taskInfo := TaskInfo{}
+
 		// wait until @taskEnd has been invoked with certain taskID
 		select {
-		case taskInfo := <-taskCompletedNotifier[taskID]:
+		case taskInfo, _ = <-taskChan:
 			log.Println("Task ID ", taskID, " ended. With Task info: ", taskInfo)
 		}
+
+		marshalInfo, err := json.Marshal(taskInfo)
+		if err != nil {
+			log.Panic(err)
+		}
+		_, err = w.Write(marshalInfo)
+		if err != nil {
+			log.Panic(err)
+		}
+		return
 	}
 
-	_, err := w.Write([]byte("Unsupported Command!"))
+	_, err = w.Write([]byte("Unsupported Command!"))
 	if err != nil {
 		log.Panic(err)
 	}

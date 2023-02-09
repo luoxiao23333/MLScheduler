@@ -8,8 +8,8 @@ const workerPort = ":8080"
 
 type workerURL string
 
-func (url workerURL) GetURL() string {
-	return fmt.Sprintf("http://%v:%v", url, workerPort)
+func (url workerURL) GetURL(route string) string {
+	return fmt.Sprintf("http://%v%v/%v", url, workerPort, route)
 }
 
 func AddWorker(hostName string) {

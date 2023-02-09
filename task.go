@@ -1,11 +1,16 @@
 package main
 
-import "os"
+type TaskSubmissionInfo struct {
+	CPU     int    `json:"cpu"`
+	Mem     int    `json:"mem"`
+	Command string `json:"command"`
+	ID      int    `json:"id"`
+}
 
 // ExitStatus return process info after the process exited or terminated
 type ExitStatus struct {
-	Signal os.Signal `json:"signal"`
-	Code   int       `json:"code"`
+	Signal int `json:"signal"`
+	Code   int `json:"code"`
 }
 
 // ExitInfo contains all info when a process exit

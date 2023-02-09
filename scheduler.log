@@ -1,0 +1,13 @@
+2023/02/09 18:43:03 Worker  localhost  Has been Registered
+2023/02/09 18:43:06 submit to http://localhost:8080/run_task, with info: &{50 10000000 python test.py 1}
+2023/02/09 18:43:06 Task has been sent with id =  1
+2023/02/09 18:43:08 Task ID  1  ended. With Task info:  {1 {{-1 0} 2010740.6030786417
+}}
+2023/02/09 18:43:30 submit to http://localhost:8080/run_task, with info: &{50 10000000 python test.py 2}
+2023/02/09 18:43:30 Task has been sent with id =  2
+2023/02/09 18:43:32 Task ID  2  ended. With Task info:  {2 {{-1 0} 2855553.41382609
+}}
+2023/02/09 18:43:39 submit to http://localhost:8080/run_task, with info: &{50 10000000 python test.py 3}
+2023/02/09 18:43:39 Task has been sent with id =  3
+2023/02/09 18:43:45 Task ID  3  ended. With Task info:  {3 {{-1 0} 7142080.56144959
+}}
