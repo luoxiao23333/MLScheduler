@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
-var schedulerURL = "http://192.168.0.101:8081"
+var schedulerPort = ":8081"
 var objectDetectionCMD = "python test.py"
 
 var taskCompletedNotifier map[int]chan TaskInfo
@@ -16,17 +18,18 @@ var taskCompletedNotifier map[int]chan TaskInfo
 func RunHttpServer() {
 	http.HandleFunc("/task_end", taskEnd)
 	http.HandleFunc("/new_task", newTask)
-	http.HandleFunc("worker_register", workerRegister)
+	http.HandleFunc("/worker_register", workerRegister)
 
-	err := http.ListenAndServe(schedulerURL, nil)
+	err := http.ListenAndServe(schedulerPort, nil)
 	if err != nil {
 		log.Panic(err)
 	}
 }
 
 func workerRegister(w http.ResponseWriter, r *http.Request) {
-	AddWorker(r.Host)
-	log.Println("Worker ", r.Host, " Has been Registered")
+	ip := strings.Split(r.Host, ":")[0]
+	AddWorker(ip)
+	log.Println("Worker ", ip, " Has been Registered")
 
 	_, err := w.Write([]byte("Registered Done!"))
 	if err != nil {
@@ -64,7 +67,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	workerURL := WorkerURLPool[taskID % len(WorkerURLPool)].GetURL()
+	workerURL := WorkerURLPool[taskID%len(WorkerURLPool)].GetURL()
 
 	if len(task) == 0 || len(cpu) == 0 || len(mem) == 0 {
 		_, err := w.Write([]byte("Un Complete Params!"))
@@ -74,7 +77,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task == "object_detection" {
-		urlString := fmt.Sprintf("%v?command=%v&cpu=%v&mem=%v&id=%v",
+		urlString := fmt.Sprintf("%v/run_task?command=%v&cpu=%v&mem=%v&id=%v",
 			workerURL, objectDetectionCMD, cpu, mem, taskID)
 
 		log.Println("Execute: ", urlString)
@@ -85,7 +88,10 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var rawData []byte
-		_, err = rep.Body.Read(rawData)
+		err = rep.Write(bytes.NewBuffer(rawData))
+		if err != nil {
+			return
+		}
 		if err != nil {
 			log.Panic(err)
 		}
