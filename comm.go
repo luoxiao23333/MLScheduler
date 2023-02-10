@@ -29,6 +29,8 @@ func RunHttpServer() {
 	}
 }
 
+// Each worker node should register their IP When join the cluster
+// TODO worker nodes should also register their resources info
 func workerRegister(w http.ResponseWriter, r *http.Request) {
 	ip := strings.Split(r.Host, ":")[0]
 	AddWorker(ip)
@@ -40,6 +42,8 @@ func workerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// When a task is finished or terminated, the worker node should notify the scheduler
+// Notified Info: TaskInfo
 func taskEnd(w http.ResponseWriter, r *http.Request) {
 	taskInfo := &TaskInfo{}
 	rawData, err := io.ReadAll(r.Body)
@@ -61,6 +65,8 @@ func taskEnd(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Receive a task from devices, and submit to specific worker
+// TODO apply and plug Scheduling and Resource Allocation Strategy
 func newTask(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Query()
 	task := param.Get("task")
