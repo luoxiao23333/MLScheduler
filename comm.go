@@ -71,8 +71,8 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Query()
 	task := param.Get("task")
 	// Expected or Minimum Resource Requirement
-	cpu, err := strconv.Atoi(param.Get("cpu"))
-	mem, err := strconv.Atoi(param.Get("mem"))
+	_, err := strconv.Atoi(param.Get("cpu"))
+	_, err = strconv.Atoi(param.Get("mem"))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -92,8 +92,6 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	if task == "object_detection" {
 		taskSubmissionInfo := &TaskSubmissionInfo{
-			CPU:     cpu,
-			Mem:     mem,
 			Command: objectDetectionCMD,
 			ID:      taskID,
 		}

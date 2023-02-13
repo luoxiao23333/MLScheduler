@@ -1,8 +1,6 @@
 package main
 
 type TaskSubmissionInfo struct {
-	CPU     int    `json:"cpu"`
-	Mem     int    `json:"mem"`
 	Command string `json:"command"`
 	ID      int    `json:"id"`
 }
