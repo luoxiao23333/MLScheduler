@@ -13,7 +13,7 @@ import (
 )
 
 var schedulerPort = ":8081"
-var objectDetectionCMD = "python test.py"
+var objectDetectionCMD = "python3 test.py"
 
 // type: map[int]chan TaskInfo
 var taskCompletedNotifier sync.Map
