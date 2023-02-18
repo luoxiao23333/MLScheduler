@@ -26,5 +26,5 @@ type ExitInfo struct {
 type TaskInfo struct {
 	TaskID   int      `json:"taskID"`
 	ExitInfo ExitInfo `json:"exitInfo"`
-	Hostname string   `json:"hostname"`
+	WorkerIP *string  `json:"workerIP"`
 }

@@ -81,7 +81,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	workerURL := WorkerURLPool[taskID%len(WorkerURLPool)].GetURL("run_task")
+	worker := WorkerURLPool[taskID%len(WorkerURLPool)]
 
 	if len(task) == 0 {
 		_, err = w.Write([]byte("Un Complete Params!"))
@@ -101,6 +101,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 			log.Panic(err)
 		}
 
+		workerURL :=  worker.GetURL("run_task")
 		log.Printf("submit to %v, with info: %v", workerURL, taskSubmissionInfo)
 
 		rep, err := http.DefaultClient.Post(workerURL, "application/json",
@@ -130,6 +131,9 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		case taskInfo, _ = <-taskChan:
 			log.Println("Task ID ", taskID, " ended. With Task info: ", taskInfo)
 		}
+
+		taskInfo.WorkerIP = new(string)
+		*taskInfo.WorkerIP = worker.GetIP()
 
 		marshalInfo, err := json.Marshal(taskInfo)
 		if err != nil {
