@@ -32,7 +32,7 @@ func RunHttpServer() {
 // Each worker node should register their IP When join the cluster
 // TODO worker nodes should also register their resources info
 func workerRegister(w http.ResponseWriter, r *http.Request) {
-	ip := strings.Split(r.Host, ":")[0]
+	ip := strings.Split(r.RemoteAddr, ":")[0]
 	AddWorker(ip)
 	log.Println("Worker ", ip, " Has been Registered")
 
