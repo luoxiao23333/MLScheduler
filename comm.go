@@ -11,11 +11,11 @@ import (
 )
 
 var schedulerPort = ":8081"
-var objectDetectionCMD = "python3 test.py"
 
 func RunHttpServer() {
 	http.HandleFunc("/new_task", newTask)
 	http.HandleFunc("/worker_register", workerRegister)
+	http.HandleFunc("/new_tracking", newTracking)
 
 	err := http.ListenAndServe(schedulerPort, nil)
 	if err != nil {
@@ -78,14 +78,6 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Panic(err)
 		}
-	} else if task == "object_tracking" {
-
-		http.Post(worker, "text/plain")
-
-		_, err = w.Write([]byte(worker.GetIP()))
-		if err != nil {
-			log.Panic(err)
-		}
 	} else {
 		_, err = w.Write([]byte("Unsupported Command!"))
 		if err != nil {
@@ -96,6 +88,9 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipart.Form) (
 	marshalInfo []byte) {
+
+	// submit object detection task to the worker
+
 	marshal, err := json.Marshal(taskInfo)
 	if err != nil {
 		log.Panic(err)
@@ -128,7 +123,7 @@ func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipar
 	log.Println("Task will sent with id = ", taskInfo.ID)
 
 	// TODO
-	// Receive images list, detection info from worker node
+	// Receive what from object detection worker
 	rep, err := http.DefaultClient.Post(workerURL, multipartWriter.FormDataContentType(),
 		body)
 	if err != nil {
@@ -141,5 +136,46 @@ func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipar
 	}
 
 	return marshalInfo
+
+}
+
+// receive tacking request from object detection
+func newTracking(w http.ResponseWriter, r *http.Request) {
+	taskID := GetUniqueID()
+	worker := WorkerPool[taskID%len(WorkerPool)]
+
+	pythonInfo, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// send tracking request
+	// TODO
+	// Now will deadlock. After send task to tracking, need non-blocked way to receive tracking info
+	// Scheduler->Tracking, Then tracking wait for OD's images, but OD wait for scheduler's tracking url
+	// scheduler now wait for tracker's return, which should not be
+	taskInfo := TaskSubmissionInfo{
+		ID:   taskID,
+		Task: "tracking",
+	}
+	marshal, err := json.Marshal(taskInfo)
+	if err != nil {
+		log.Panic(err)
+	}
+	body := &bytes.Buffer{}
+	multipartWriter := multipart.NewWriter(body)
+	err = multipartWriter.WriteField("json", string(marshal))
+	err = multipartWriter.WriteField("pythonInfo", string(pythonInfo))
+	_, err = http.Post(worker.GetURL("run_task"), multipartWriter.FormDataContentType(), body)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// send back object detection worker tracker's url
+	// object detection worker will send images to tracker
+	_, err = w.Write([]byte(worker.GetURL("tracking_upload")))
+	if err != nil {
+		log.Panic(err)
+	}
 
 }
