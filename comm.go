@@ -3,23 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"strconv"
 	"strings"
-	"sync"
 )
 
 var schedulerPort = ":8081"
 var objectDetectionCMD = "python3 test.py"
 
-// type: map[int]chan TaskInfo
-var taskCompletedNotifier sync.Map
-
 func RunHttpServer() {
-	http.HandleFunc("/task_end", taskEnd)
 	http.HandleFunc("/new_task", newTask)
 	http.HandleFunc("/worker_register", workerRegister)
 
@@ -42,37 +36,20 @@ func workerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// When a task is finished or terminated, the worker node should notify the scheduler
-// Notified Info: TaskInfo
-func taskEnd(w http.ResponseWriter, r *http.Request) {
-	taskInfo := &TaskInfo{}
-	rawData, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Panicf("Http Read Failed: %v", err)
-	}
-
-	err = json.Unmarshal(rawData, taskInfo)
-	if err != nil {
-		log.Panicf("Json Unmarshal Failed: %v\nraw data: %v", err, string(rawData))
-	}
-
-	taskChan, _ := taskCompletedNotifier.Load(taskInfo.TaskID)
-	taskChan.(chan TaskInfo) <- *taskInfo
-
-	_, err = w.Write([]byte(fmt.Sprint("Receive! Scheduler known task ", taskInfo.TaskID, " Done!")))
-	if err != nil {
-		log.Panicf("Http Write Failed: %v", err)
-	}
-}
-
 // Receive a task from devices, and submit to specific worker
 // TODO apply and plug Scheduling and Resource Allocation Strategy
 func newTask(w http.ResponseWriter, r *http.Request) {
-	param := r.URL.Query()
-	task := param.Get("task")
-	// Expected or Minimum Resource Requirement
-	_, err := strconv.Atoi(param.Get("cpu"))
-	_, err = strconv.Atoi(param.Get("mem"))
+	reader, err := r.MultipartReader()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	form, err := reader.ReadForm(1024 * 1024 * 100)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	task := form.Value["task"][0]
 	if err != nil {
 		log.Panic(err)
 	}
@@ -81,7 +58,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	worker := WorkerURLPool[taskID%len(WorkerURLPool)]
+	worker := WorkerPool[taskID%len(WorkerPool)]
 
 	if len(task) == 0 {
 		_, err = w.Write([]byte("Un Complete Params!"))
@@ -90,65 +67,79 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	taskSubmissionInfo := &TaskSubmissionInfo{
+		ID:   taskID,
+		Task: task,
+	}
+
 	if task == "object_detection" {
-		taskSubmissionInfo := &TaskSubmissionInfo{
-			Command: objectDetectionCMD,
-			ID:      taskID,
-		}
-
-		marshal, err := json.Marshal(taskSubmissionInfo)
-		if err != nil {
-			log.Panic(err)
-		}
-
-		workerURL :=  worker.GetURL("run_task")
-		log.Printf("submit to %v, with info: %v", workerURL, taskSubmissionInfo)
-
-		rep, err := http.DefaultClient.Post(workerURL, "application/json",
-			bytes.NewReader(marshal))
-		if err != nil {
-			log.Panic(err)
-		}
-
-		rawData, err := io.ReadAll(rep.Body)
-		if err != nil {
-			log.Panic(err)
-		}
-
-		taskID, err = strconv.Atoi(string(rawData))
-		if err != nil {
-			log.Panic(err)
-		}
-
-		log.Println("Task has been sent with id = ", taskID)
-
-		taskChan := make(chan TaskInfo, 1)
-		taskCompletedNotifier.Store(taskID, taskChan)
-		taskInfo := TaskInfo{}
-
-		// wait until @taskEnd has been invoked with certain taskID
-		select {
-		case taskInfo, _ = <-taskChan:
-			log.Println("Task ID ", taskID, " ended. With Task info: ", taskInfo)
-		}
-
-		taskInfo.WorkerIP = new(string)
-		*taskInfo.WorkerIP = worker.GetIP()
-
-		marshalInfo, err := json.Marshal(taskInfo)
-		if err != nil {
-			log.Panic(err)
-		}
+		marshalInfo := objectDetection(taskSubmissionInfo, worker, form)
 		_, err = w.Write(marshalInfo)
 		if err != nil {
 			log.Panic(err)
 		}
-		return
-	}
+	} else if task == "object_tracking" {
 
-	_, err = w.Write([]byte("Unsupported Command!"))
+		http.Post(worker, "text/plain")
+
+		_, err = w.Write([]byte(worker.GetIP()))
+		if err != nil {
+			log.Panic(err)
+		}
+	} else {
+		_, err = w.Write([]byte("Unsupported Command!"))
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+}
+
+func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipart.Form) (
+	marshalInfo []byte) {
+	marshal, err := json.Marshal(taskInfo)
 	if err != nil {
 		log.Panic(err)
 	}
+
+	workerURL := worker.GetURL("run_task")
+	log.Printf("submit to %v, with info: %v", workerURL, taskInfo)
+
+	body := &bytes.Buffer{}
+	multipartWriter := multipart.NewWriter(body)
+	err = multipartWriter.WriteField("json", string(marshal))
+	if err != nil {
+		log.Panic(err)
+	}
+
+	fileHeader := form.File["video"][0]
+	if err != nil {
+		log.Panic(err)
+	}
+	writer, err := multipartWriter.CreateFormFile("video", fileHeader.Filename)
+	if err != nil {
+		log.Panic(err)
+	}
+	file, err := fileHeader.Open()
+	_, err = io.Copy(writer, file)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	log.Println("Task will sent with id = ", taskInfo.ID)
+
+	// TODO
+	// Receive images list, detection info from worker node
+	rep, err := http.DefaultClient.Post(workerURL, multipartWriter.FormDataContentType(),
+		body)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	marshalInfo, err = json.Marshal(taskInfo)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return marshalInfo
 
 }
