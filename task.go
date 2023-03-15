@@ -1,10 +1,5 @@
 package main
 
-type TaskSubmissionInfo struct {
-	ID   int    `json:"id"`
-	Task string `json:"task"`
-}
-
 // ExitStatus return process info after the process exited or terminated
 type ExitStatus struct {
 	Signal int `json:"signal"`

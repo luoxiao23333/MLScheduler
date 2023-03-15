@@ -1,5 +1,2 @@
-2023/02/18 12:55:01 Worker  192.168.1.101  Has been Registered
-2023/02/18 12:55:05 submit to http://192.168.1.101:8080/run_task, with info: &{python3 test.py 1}
-2023/02/18 12:55:05 Task has been sent with id =  1
-2023/02/18 12:55:05 Task ID  1  ended. With Task info:  {1 {{-1 0} 1663097.8855720896
-} <nil>}
+2023/03/15 20:22:43 Worker  192.168.1.101  Has been Registered
+2023/03/15 20:22:59 submit to 192.168.1.101

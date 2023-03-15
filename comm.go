@@ -2,20 +2,25 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 var schedulerPort = ":8081"
 
+var taskFinishNotifier sync.Map
+
 func RunHttpServer() {
 	http.HandleFunc("/new_task", newTask)
 	http.HandleFunc("/worker_register", workerRegister)
-	http.HandleFunc("/new_tracking", newTracking)
+	http.HandleFunc("/object_detection_finish", objectDetectionFinish)
 
 	err := http.ListenAndServe(schedulerPort, nil)
 	if err != nil {
@@ -49,7 +54,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		log.Panic(err)
 	}
 
-	task := form.Value["task"][0]
+	taskName := form.Value["task_name"][0]
 	if err != nil {
 		log.Panic(err)
 	}
@@ -60,21 +65,39 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	// Default Round Robin and Allocate Expected Resource
 	worker := WorkerPool[taskID%len(WorkerPool)]
 
-	if len(task) == 0 {
+	if len(taskName) == 0 {
 		_, err = w.Write([]byte("Un Complete Params!"))
 		if err != nil {
 			log.Panic(err)
 		}
 	}
 
-	taskSubmissionInfo := &TaskSubmissionInfo{
-		ID:   taskID,
-		Task: task,
-	}
+	if taskName == "object_detection" {
+		notifier := make(chan *multipart.Form, 1)
+		taskFinishNotifier.Store(taskID, notifier)
 
-	if task == "object_detection" {
-		marshalInfo := objectDetection(taskSubmissionInfo, worker, form)
-		_, err = w.Write(marshalInfo)
+		log.Printf("submit to %v", worker.GetIP())
+		objectDetection(worker, form, taskID)
+
+		go func(clientIP string) {
+			finishForm := <-notifier
+
+			log.Printf("receive result of task id: %v", taskID)
+
+			buffer := &bytes.Buffer{}
+			multipartWriter := multipart.NewWriter(buffer)
+
+			saveFile("video", "output.mp4", finishForm)
+			saveFile("bbox_txt", "output.txt", finishForm)
+			saveFile("bbox_xlsx", "output.xlsx", finishForm)
+
+			_, err = http.Post(clientIP+":8080/object_detection", multipartWriter.FormDataContentType(), buffer)
+			if err != nil {
+				log.Panic(err)
+			}
+		}(r.RemoteAddr)
+
+		_, err = w.Write([]byte(fmt.Sprintf("Task has been submitted to %v", worker.GetIP())))
 		if err != nil {
 			log.Panic(err)
 		}
@@ -86,31 +109,25 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipart.Form) (
-	marshalInfo []byte) {
+func objectDetection(worker Worker, form *multipart.Form, taskID int) {
 
 	// submit object detection task to the worker
 
-	marshal, err := json.Marshal(taskInfo)
-	if err != nil {
+	workerURL := worker.GetURL("run_task")
+
+	postBody := &bytes.Buffer{}
+	multipartWriter := multipart.NewWriter(postBody)
+
+	if err := multipartWriter.WriteField("task_name", "object_detection"); err != nil {
 		log.Panic(err)
 	}
 
-	workerURL := worker.GetURL("run_task")
-	log.Printf("submit to %v, with info: %v", workerURL, taskInfo)
-
-	body := &bytes.Buffer{}
-	multipartWriter := multipart.NewWriter(body)
-	err = multipartWriter.WriteField("json", string(marshal))
-	if err != nil {
+	if err := multipartWriter.WriteField("task_id", strconv.Itoa(taskID)); err != nil {
 		log.Panic(err)
 	}
 
 	fileHeader := form.File["video"][0]
-	if err != nil {
-		log.Panic(err)
-	}
-	writer, err := multipartWriter.CreateFormFile("video", fileHeader.Filename)
+	writer, err := multipartWriter.CreateFormFile("video", "input.avi")
 	if err != nil {
 		log.Panic(err)
 	}
@@ -120,62 +137,62 @@ func objectDetection(taskInfo *TaskSubmissionInfo, worker Worker, form *multipar
 		log.Panic(err)
 	}
 
-	log.Println("Task will sent with id = ", taskInfo.ID)
-
-	// TODO
-	// Receive what from object detection worker
-	rep, err := http.DefaultClient.Post(workerURL, multipartWriter.FormDataContentType(),
-		body)
+	err = multipartWriter.Close()
 	if err != nil {
 		log.Panic(err)
 	}
 
-	marshalInfo, err = json.Marshal(taskInfo)
+	_, err = http.Post(workerURL, multipartWriter.FormDataContentType(), postBody)
 	if err != nil {
 		log.Panic(err)
 	}
-
-	return marshalInfo
-
 }
 
-// receive tacking request from object detection
-func newTracking(w http.ResponseWriter, r *http.Request) {
-	taskID := GetUniqueID()
-	worker := WorkerPool[taskID%len(WorkerPool)]
-
-	pythonInfo, err := io.ReadAll(r.Body)
+// TODO
+// worker send task id here
+// receive task id and send result to corresponding place
+func objectDetectionFinish(w http.ResponseWriter, r *http.Request) {
+	multipartReader, err := r.MultipartReader()
 	if err != nil {
 		log.Panic(err)
 	}
 
-	// send tracking request
-	// TODO
-	// Now will deadlock. After send task to tracking, need non-blocked way to receive tracking info
-	// Scheduler->Tracking, Then tracking wait for OD's images, but OD wait for scheduler's tracking url
-	// scheduler now wait for tracker's return, which should not be
-	taskInfo := TaskSubmissionInfo{
-		ID:   taskID,
-		Task: "tracking",
-	}
-	marshal, err := json.Marshal(taskInfo)
-	if err != nil {
-		log.Panic(err)
-	}
-	body := &bytes.Buffer{}
-	multipartWriter := multipart.NewWriter(body)
-	err = multipartWriter.WriteField("json", string(marshal))
-	err = multipartWriter.WriteField("pythonInfo", string(pythonInfo))
-	_, err = http.Post(worker.GetURL("run_task"), multipartWriter.FormDataContentType(), body)
+	form, err := multipartReader.ReadForm(100 * 1024 * 1024)
+	taskID, err := strconv.Atoi(form.Value["task_id"][0])
 	if err != nil {
 		log.Panic(err)
 	}
 
-	// send back object detection worker tracker's url
-	// object detection worker will send images to tracker
-	_, err = w.Write([]byte(worker.GetURL("tracking_upload")))
+	notifier, _ := taskFinishNotifier.LoadAndDelete(taskID)
+
+	notifier.(chan *multipart.Form) <- form
+}
+
+func saveFile(fieldName, fileName string, form *multipart.Form) {
+	file, err := form.File[fieldName][0].Open()
 	if err != nil {
 		log.Panic(err)
 	}
 
+	err = os.Remove(fileName)
+	if err != nil {
+		log.Panic(err)
+	}
+	newFile, err := os.Create(fileName)
+	if err != nil {
+		log.Panic(err)
+	}
+	_, err = io.Copy(newFile, file)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	err = file.Close()
+	if err != nil {
+		log.Panic(err)
+	}
+	err = newFile.Close()
+	if err != nil {
+		log.Panic(err)
+	}
 }
