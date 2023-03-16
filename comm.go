@@ -7,7 +7,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,9 +86,24 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 			buffer := &bytes.Buffer{}
 			multipartWriter := multipart.NewWriter(buffer)
 
-			saveFile("video", "output.mp4", finishForm)
-			saveFile("bbox_txt", "output.txt", finishForm)
-			saveFile("bbox_xlsx", "output.xlsx", finishForm)
+			saveFile("video", "output.mp4", finishForm, multipartWriter)
+			saveFile("bbox_txt", "output.txt", finishForm, multipartWriter)
+			saveFile("bbox_xlsx", "output.xlsx", finishForm, multipartWriter)
+
+			if err = multipartWriter.WriteField("container_output",
+				finishForm.Value["container_output"][0]); err != nil {
+				log.Panic(err)
+			}
+
+			err = multipartWriter.Close()
+			if err != nil {
+				log.Panic(err)
+			}
+
+			// split ip and port
+			clientIP = "http://" + strings.Split(clientIP, ":")[0]
+
+			log.Printf("result send back to %v", clientIP+":8080/object_detection")
 
 			_, err = http.Post(clientIP+":8080/object_detection", multipartWriter.FormDataContentType(), buffer)
 			if err != nil {
@@ -148,9 +162,6 @@ func objectDetection(worker Worker, form *multipart.Form, taskID int) {
 	}
 }
 
-// TODO
-// worker send task id here
-// receive task id and send result to corresponding place
 func objectDetectionFinish(w http.ResponseWriter, r *http.Request) {
 	multipartReader, err := r.MultipartReader()
 	if err != nil {
@@ -168,21 +179,18 @@ func objectDetectionFinish(w http.ResponseWriter, r *http.Request) {
 	notifier.(chan *multipart.Form) <- form
 }
 
-func saveFile(fieldName, fileName string, form *multipart.Form) {
+func saveFile(fieldName, fileName string, form *multipart.Form, multipartWriter *multipart.Writer) {
 	file, err := form.File[fieldName][0].Open()
 	if err != nil {
 		log.Panic(err)
 	}
 
-	err = os.Remove(fileName)
+	formFile, err := multipartWriter.CreateFormFile(fieldName, fileName)
 	if err != nil {
 		log.Panic(err)
 	}
-	newFile, err := os.Create(fileName)
-	if err != nil {
-		log.Panic(err)
-	}
-	_, err = io.Copy(newFile, file)
+
+	_, err = io.Copy(formFile, file)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -191,8 +199,5 @@ func saveFile(fieldName, fileName string, form *multipart.Form) {
 	if err != nil {
 		log.Panic(err)
 	}
-	err = newFile.Close()
-	if err != nil {
-		log.Panic(err)
-	}
+
 }
