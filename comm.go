@@ -19,7 +19,8 @@ var taskFinishNotifier sync.Map
 func RunHttpServer() {
 	http.HandleFunc("/new_task", newTask)
 	http.HandleFunc("/worker_register", workerRegister)
-	http.HandleFunc("/object_detection_finish", objectDetectionFinish)
+	http.HandleFunc("/mcmot_finish", MCMOTFinish)
+	http.HandleFunc("/slam_finish", slamFinish)
 
 	err := http.ListenAndServe(schedulerPort, nil)
 	if err != nil {
@@ -29,12 +30,23 @@ func RunHttpServer() {
 
 // Each worker node should register their IP When join the cluster
 // TODO worker nodes should also register their resources info
+// workerRegister return back assigned port for the worker
 func workerRegister(w http.ResponseWriter, r *http.Request) {
 	ip := strings.Split(r.RemoteAddr, ":")[0]
-	AddWorker(ip)
+	var port string
+
+	buffer := &bytes.Buffer{}
+	if _, err := io.Copy(buffer, r.Body); err != nil {
+		log.Panic(err)
+	}
+	
+	taskName := buffer.String()
+
+	port = AddWorker(ip, taskName)
+
 	log.Println("Worker ", ip, " Has been Registered")
 
-	_, err := w.Write([]byte("Registered Done!"))
+	_, err := w.Write([]byte(port))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -62,7 +74,9 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	worker := WorkerPool[taskID%len(WorkerPool)]
+	worker := GetWorker(taskName)
+
+	log.Printf("Receive task %v, assigned id %v, worker %v", taskName, taskID, worker.Describe())
 
 	if len(taskName) == 0 {
 		_, err = w.Write([]byte("Un Complete Params!"))
@@ -71,12 +85,12 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if taskName == "object_detection" {
+	if taskName == "mcmot" {
 		notifier := make(chan *multipart.Form, 1)
 		taskFinishNotifier.Store(taskID, notifier)
 
 		log.Printf("submit to %v", worker.GetIP())
-		objectDetection(worker, form, taskID)
+		doMCMOT(worker, form, taskID)
 
 		go func(clientIP string) {
 			finishForm := <-notifier
@@ -103,15 +117,58 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 			// split ip and port
 			clientIP = "http://" + strings.Split(clientIP, ":")[0]
 
-			log.Printf("result send back to %v", clientIP+":8080/object_detection")
+			log.Printf("result send back to %v", clientIP+":8080/mcmot")
 
-			_, err = http.Post(clientIP+":8080/object_detection", multipartWriter.FormDataContentType(), buffer)
+			_, err = http.Post(clientIP+":8080/mcmot", multipartWriter.FormDataContentType(), buffer)
 			if err != nil {
 				log.Panic(err)
 			}
 		}(r.RemoteAddr)
 
 		_, err = w.Write([]byte(fmt.Sprintf("Task has been submitted to %v", worker.GetIP())))
+		if err != nil {
+			log.Panic(err)
+		}
+	} else if taskName == "slam" {
+		notifier := make(chan *multipart.Form, 1)
+		taskFinishNotifier.Store(taskID, notifier)
+
+		log.Printf("submit to %v", worker.GetIP())
+		slam(worker, form, taskID)
+
+		go func(clientIP string) {
+			finishForm := <-notifier
+
+			log.Printf("receive result of task id: %v", taskID)
+
+			buffer := &bytes.Buffer{}
+			multipartWriter := multipart.NewWriter(buffer)
+
+			saveFile("key_frames", "KeyFrameTrajectory.txt", finishForm, multipartWriter)
+
+			if err = multipartWriter.WriteField("container_output",
+				finishForm.Value["container_output"][0]); err != nil {
+				log.Panic(err)
+			}
+
+			err = multipartWriter.Close()
+			if err != nil {
+				log.Panic(err)
+			}
+
+			// split ip and port
+			clientIP = "http://" + strings.Split(clientIP, ":")[0]
+
+			log.Printf("result send back to %v", clientIP+":8080/slam")
+
+			_, err = http.Post(clientIP+":8080/slam", multipartWriter.FormDataContentType(), buffer)
+			if err != nil {
+				log.Panic(err)
+			}
+		}(r.RemoteAddr)
+
+		_, err = w.Write([]byte(fmt.Sprintf("Task has been submitted to %v",
+			worker.GetURL("run_task"))))
 		if err != nil {
 			log.Panic(err)
 		}
@@ -123,16 +180,16 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func objectDetection(worker Worker, form *multipart.Form, taskID int) {
+func doMCMOT(worker *Worker, form *multipart.Form, taskID int) {
 
-	// submit object detection task to the worker
+	// submit MCMOT task to the worker
 
 	workerURL := worker.GetURL("run_task")
 
 	postBody := &bytes.Buffer{}
 	multipartWriter := multipart.NewWriter(postBody)
 
-	if err := multipartWriter.WriteField("task_name", "object_detection"); err != nil {
+	if err := multipartWriter.WriteField("task_name", "mcmot"); err != nil {
 		log.Panic(err)
 	}
 
@@ -162,7 +219,63 @@ func objectDetection(worker Worker, form *multipart.Form, taskID int) {
 	}
 }
 
-func objectDetectionFinish(w http.ResponseWriter, r *http.Request) {
+func MCMOTFinish(w http.ResponseWriter, r *http.Request) {
+	multipartReader, err := r.MultipartReader()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	form, err := multipartReader.ReadForm(100 * 1024 * 1024)
+	taskID, err := strconv.Atoi(form.Value["task_id"][0])
+	if err != nil {
+		log.Panic(err)
+	}
+
+	notifier, _ := taskFinishNotifier.LoadAndDelete(taskID)
+
+	notifier.(chan *multipart.Form) <- form
+}
+
+func slam(worker *Worker, form *multipart.Form, taskID int) {
+
+	// submit slam task to the worker
+
+	workerURL := worker.GetURL("run_task")
+
+	postBody := &bytes.Buffer{}
+	multipartWriter := multipart.NewWriter(postBody)
+
+	if err := multipartWriter.WriteField("task_name", "slam"); err != nil {
+		log.Panic(err)
+	}
+
+	if err := multipartWriter.WriteField("task_id", strconv.Itoa(taskID)); err != nil {
+		log.Panic(err)
+	}
+
+	fileHeader := form.File["video"][0]
+	writer, err := multipartWriter.CreateFormFile("video", "input.mp4")
+	if err != nil {
+		log.Panic(err)
+	}
+	file, err := fileHeader.Open()
+	_, err = io.Copy(writer, file)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	err = multipartWriter.Close()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	_, err = http.Post(workerURL, multipartWriter.FormDataContentType(), postBody)
+	if err != nil {
+		log.Panic(err)
+	}
+}
+
+func slamFinish(w http.ResponseWriter, r *http.Request) {
 	multipartReader, err := r.MultipartReader()
 	if err != nil {
 		log.Panic(err)
