@@ -1,8 +1,10 @@
-2023/03/22 19:26:54 Worker  192.168.1.101  Has been Registered
-2023/03/22 19:26:59 Worker  192.168.1.101  Has been Registered
-2023/03/22 19:27:31 Receive task mcmot, assigned id 1, worker [IP: 192.168.1.101, Task Type: mcmot]
-2023/03/22 19:27:31 submit to 192.168.1.101
-2023/03/22 19:27:32 Receive task slam, assigned id 2, worker [IP: 192.168.1.101, Task Type: slam]
-2023/03/22 19:27:32 submit to 192.168.1.101
-2023/03/22 19:28:30 receive result of task id: 2
-2023/03/22 19:28:30 result send back to http://192.168.1.102:8080/slam
+2023/03/23 10:19:58 Worker  192.168.1.101  Has been Registered
+2023/03/23 10:20:00 Worker  192.168.1.101  Has been Registered
+2023/03/23 10:20:09 Receive task mcmot, assigned id 1, worker_pool [IP: 192.168.1.101, Task Type: mcmot]
+2023/03/23 10:20:09 submit to 192.168.1.101
+2023/03/23 10:20:10 Receive task slam, assigned id 2, worker_pool [IP: 192.168.1.101, Task Type: slam]
+2023/03/23 10:20:10 submit to 192.168.1.101
+2023/03/23 10:21:09 receive result of task id: 2
+2023/03/23 10:21:09 result send back to http://192.168.1.102:8080/slam
+2023/03/23 10:26:52 receive result of task id: 1
+2023/03/23 10:26:52 result send back to http://192.168.1.102:8080/mcmot
