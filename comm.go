@@ -4,9 +4,11 @@ import (
 	"Scheduler/handler"
 	"Scheduler/worker_pool"
 	"bytes"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +17,7 @@ var schedulerPort = ":8081"
 func RunHttpServer() {
 	http.HandleFunc("/new_task", newTask)
 	http.HandleFunc("/worker_register", workerRegister)
+	http.HandleFunc("/query_metric", queryMetrics)
 	http.HandleFunc("/mcmot_finish", handler.GetHandler("mcmot").FinishTask)
 	http.HandleFunc("/slam_finish", handler.GetHandler("slam").FinishTask)
 
@@ -29,26 +32,17 @@ func RunHttpServer() {
 // workerRegister return back assigned port for the worker_pool
 func workerRegister(w http.ResponseWriter, r *http.Request) {
 	ip := strings.Split(r.RemoteAddr, ":")[0]
-	var port string
 
 	buffer := &bytes.Buffer{}
 	if _, err := io.Copy(buffer, r.Body); err != nil {
 		log.Panic(err)
 	}
 
-	taskName := buffer.String()
-
-	port = worker_pool.AddWorker(ip, taskName)
-
 	log.Println("Worker ", ip, " Has been Registered")
-
-	_, err := w.Write([]byte(port))
-	if err != nil {
-		log.Panic(err)
-	}
 }
 
 // Receive a task from devices, and submit to specific worker_pool
+// Write back task id
 // TODO apply and plug Scheduling and Resource Allocation Strategy
 func newTask(w http.ResponseWriter, r *http.Request) {
 	reader, err := r.MultipartReader()
@@ -70,7 +64,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	// TODO Make Decision Here, Apply True Resource Allocation
 	// Default Round Robin and Allocate Expected Resource
-	worker := worker_pool.GetWorker(taskName)
+	worker := worker_pool.GetWorker(taskName, strconv.Itoa(taskID))
 
 	log.Printf("Receive task %v, assigned id %v, worker_pool %v", taskName, taskID, worker.Describe())
 
@@ -83,5 +77,43 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 
 	handlers := handler.GetHandler(taskName)
 	handlers.StartTask(worker, form, taskID)
-	handlers.SendBackResult(w, r, taskID, worker, form)
+	handlers.SendBackResult(r, taskID, worker)
+
+	_, err = w.Write([]byte(strconv.Itoa(taskID)))
+	if err != nil {
+		log.Panic(err)
+	}
+}
+
+func queryMetrics(w http.ResponseWriter, r *http.Request) {
+	buffer := &bytes.Buffer{}
+	if _, err := io.Copy(buffer, r.Body); err != nil {
+		log.Panic(err)
+	}
+
+	taskID := buffer.String()
+	worker := worker_pool.GetWorkerByTaskID(taskID)
+	var usage worker_pool.ResourceUsage
+	if worker != nil {
+		usage = worker_pool.QueryResourceUsage(worker.GetPodName())
+	} else {
+		usage = worker_pool.ResourceUsage{
+			CPU:              0,
+			Memory:           0,
+			Storage:          0,
+			StorageEphemeral: 0,
+			CollectedTime:    "Task has been ended",
+			Window:           0,
+		}
+	}
+
+	marshal, err := json.Marshal(usage)
+	if err != nil {
+		log.Panic(err)
+	}
+	_, err = w.Write(marshal)
+	if err != nil {
+		log.Panic(err)
+	}
+
 }

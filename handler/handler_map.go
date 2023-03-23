@@ -13,8 +13,7 @@ var taskFinishNotifier sync.Map
 
 type StartTask func(worker *worker_pool.Worker, form *multipart.Form, taskID int)
 type FinishTask func(w http.ResponseWriter, r *http.Request)
-type SendBackResult func(w http.ResponseWriter, r *http.Request,
-	taskID int, worker *worker_pool.Worker, form *multipart.Form)
+type SendBackResult func(r *http.Request, taskID int, worker *worker_pool.Worker)
 
 type Handler struct {
 	StartTask

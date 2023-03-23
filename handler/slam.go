@@ -3,7 +3,6 @@ package handler
 import (
 	"Scheduler/worker_pool"
 	"bytes"
-	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
@@ -69,8 +68,7 @@ func slamFinish(w http.ResponseWriter, r *http.Request) {
 	notifier.(chan *multipart.Form) <- form
 }
 
-func SendBackSlam(w http.ResponseWriter, r *http.Request,
-	taskID int, worker *worker_pool.Worker, form *multipart.Form) {
+func SendBackSlam(r *http.Request, taskID int, worker *worker_pool.Worker) {
 	notifier := make(chan *multipart.Form, 1)
 	taskFinishNotifier.Store(taskID, notifier)
 
@@ -78,7 +76,7 @@ func SendBackSlam(w http.ResponseWriter, r *http.Request,
 		finishForm := <-notifier
 
 		log.Printf("receive result of task id: %v", taskID)
-		worker.ReturnToPool()
+		worker.ReturnToPool(strconv.Itoa(taskID))
 
 		buffer := &bytes.Buffer{}
 		multipartWriter := multipart.NewWriter(buffer)
@@ -105,10 +103,4 @@ func SendBackSlam(w http.ResponseWriter, r *http.Request,
 			log.Panic(err)
 		}
 	}(r.RemoteAddr)
-
-	_, err := w.Write([]byte(fmt.Sprintf("Task has been submitted to %v",
-		worker.GetURL("run_task"))))
-	if err != nil {
-		log.Panic(err)
-	}
 }

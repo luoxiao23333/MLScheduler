@@ -3,7 +3,6 @@ package handler
 import (
 	"Scheduler/worker_pool"
 	"bytes"
-	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
@@ -70,8 +69,7 @@ func MCMOTFinish(w http.ResponseWriter, r *http.Request) {
 	notifier.(chan *multipart.Form) <- form
 }
 
-func SendBackMCMOT(w http.ResponseWriter, r *http.Request,
-	taskID int, worker *worker_pool.Worker, form *multipart.Form) {
+func SendBackMCMOT(r *http.Request, taskID int, worker *worker_pool.Worker) {
 	notifier := make(chan *multipart.Form, 1)
 	taskFinishNotifier.Store(taskID, notifier)
 
@@ -79,7 +77,7 @@ func SendBackMCMOT(w http.ResponseWriter, r *http.Request,
 		finishForm := <-notifier
 
 		log.Printf("receive result of task id: %v", taskID)
-		worker.ReturnToPool()
+		worker.ReturnToPool(strconv.Itoa(taskID))
 
 		buffer := &bytes.Buffer{}
 		multipartWriter := multipart.NewWriter(buffer)
@@ -108,10 +106,4 @@ func SendBackMCMOT(w http.ResponseWriter, r *http.Request,
 			log.Panic(err)
 		}
 	}(r.RemoteAddr)
-
-	_, err := w.Write([]byte(fmt.Sprintf("Task has been submitted to %v", worker.GetIP())))
-	if err != nil {
-		log.Panic(err)
-	}
-
 }
