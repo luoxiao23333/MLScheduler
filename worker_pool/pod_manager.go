@@ -30,13 +30,25 @@ func CreatePod(taskName, nodeName, hostname string) {
 	}
 
 	worker := AddWorker(hostname, taskName)
-	name := fmt.Sprintf("%v_%v", taskName, worker.port)
+	name := fmt.Sprintf("%v-%v", taskName, worker.port)
 	worker.podName = name
 
 	// define the container
 	container := corev1.Container{
-		Name:  name,
-		Image: containerMap[taskName],
+		Name:    name,
+		Image:   containerMap[taskName],
+		Command: []string{"/bin/bash", "-c", "--"},
+		Args:    []string{"while true; do sleep 30; done;"},
+		Env: []corev1.EnvVar{
+			{
+				Name:  "task_name",
+				Value: taskName,
+			},
+			{
+				Name:  "port",
+				Value: worker.port,
+			},
+		},
 	}
 
 	// define the pod
@@ -48,11 +60,9 @@ func CreatePod(taskName, nodeName, hostname string) {
 			},
 		},
 		Spec: corev1.PodSpec{
+			NodeName:    nodeName,
 			Containers:  []corev1.Container{container},
 			HostNetwork: true,
-			NodeSelector: map[string]string{
-				"kubernetes.io/hostname": nodeName,
-			},
 		},
 	}
 

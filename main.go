@@ -1,6 +1,9 @@
 package main
 
-import "Scheduler/worker_pool"
+import (
+	"Scheduler/worker_pool"
+	"log"
+)
 
 type NewPod struct {
 	TaskName string
@@ -32,9 +35,11 @@ var podsInfo = []NewPod{
 }
 
 func main() {
-	initLog()
-
-	for _, podInfo := range podsInfo {
+	for index, podInfo := range podsInfo {
+		if index <= 1 {
+			continue
+		}
+		log.Printf("Creating %v", podInfo)
 		worker_pool.CreatePod(podInfo.TaskName, podInfo.NodeName, podInfo.HostName)
 	}
 
