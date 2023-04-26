@@ -3,22 +3,85 @@ package worker_pool
 import (
 	"context"
 	"fmt"
+	"log"
+	"sync"
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/metrics/pkg/client/clientset/versioned"
-	"log"
-	"time"
 )
 
 var containerMap = map[string]string{
-	"mcmot": "docker.io/luoxiao23333/task_mcmot:v0",
-	"slam":  "docker.io/luoxiao23333/task_slam:v0",
+	"mcmot":  "docker.io/luoxiao23333/task_mcmot:v0",
+	"slam":   "docker.io/luoxiao23333/task_slam:v0",
+	"fusion": "docker.io/luoxiao23333/task_fusion:v0",
 }
 
-func CreatePod(taskName, nodeName, hostname string) {
+type podInfo struct {
+	TaskName string
+	NodeName string
+	HostName string
+}
+
+var PodsInfo = map[string]podInfo{
+	"slam-as1": {
+		TaskName: "slam",
+		NodeName: "k8s-as1",
+		HostName: "192.168.1.100",
+	},
+	"fusion-as1": {
+		TaskName: "fusion",
+		NodeName: "k8s-as1",
+		HostName: "192.168.1.100",
+	},
+	"slam-as2": {
+		TaskName: "slam",
+		NodeName: "k8s-as2",
+		HostName: "192.168.1.103",
+	},
+	"mcmot-controller": {
+		TaskName: "mcmot",
+		NodeName: "controller",
+		HostName: "192.168.1.101",
+	},
+	"slam-controller": {
+		TaskName: "slam",
+		NodeName: "controller",
+		HostName: "192.168.1.101",
+	},
+	"fusion-controller": {
+		TaskName: "fusion",
+		NodeName: "controller",
+		HostName: "192.168.1.101",
+	},
+}
+
+var clientSet *kubernetes.Clientset = nil
+var clientSetLock = sync.Mutex{}
+
+func GetClientSet() *kubernetes.Clientset {
+	clientSetLock.Lock()
+	if clientSet == nil {
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			log.Panic(err)
+		}
+		clientSet, err = kubernetes.NewForConfig(config)
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+	clientSetLock.Unlock()
+	return clientSet
+}
+
+func CreateWorker(taskName, nodeName, hostname, cpuLimit, memLimit string) *Worker {
 	// create the Kubernetes client
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -29,16 +92,24 @@ func CreatePod(taskName, nodeName, hostname string) {
 		log.Panic(err)
 	}
 
-	worker := AddWorker(hostname, taskName)
-	name := fmt.Sprintf("%v-%v", taskName, worker.port)
+	worker := addWorker(hostname, taskName, nodeName)
+	name := fmt.Sprintf("%v-%v-%v", taskName, worker.port, nodeName)
 	worker.podName = name
 
 	// define the container
 	container := corev1.Container{
-		Name:    name,
-		Image:   containerMap[taskName],
-		Command: []string{"/bin/bash", "-c", "--"},
-		Args:    []string{"while true; do sleep 30; done;"},
+		Name:  name,
+		Image: containerMap[taskName],
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(cpuLimit),
+				corev1.ResourceMemory: resource.MustParse(memLimit),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("0"),
+				corev1.ResourceMemory: resource.MustParse("0"),
+			},
+		},
 		Env: []corev1.EnvVar{
 			{
 				Name:  "task_name",
@@ -75,13 +146,14 @@ func CreatePod(taskName, nodeName, hostname string) {
 	log.Printf("Creating pod %v in %v.\n", result.GetObjectMeta().GetName(), nodeName)
 
 	// wait until pod created
-	err = wait.PollImmediate(5*time.Second, 2*time.Minute, func() (bool, error) {
-		pod, err = clientSet.CoreV1().Pods("default").Get(context.Background(),
+	err = wait.PollImmediate(500*time.Millisecond, 2*time.Minute, func() (bool, error) {
+		podFound, err := clientSet.CoreV1().Pods("default").Get(context.Background(),
 			pod.Name, meta_v1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
-		if pod.Status.Phase == corev1.PodRunning {
+
+		if podFound.Status.Phase == corev1.PodRunning {
 			return true, nil
 		}
 		return false, nil
@@ -91,6 +163,48 @@ func CreatePod(taskName, nodeName, hostname string) {
 	}
 
 	log.Printf("Pod Created!")
+	return worker
+}
+
+func (w *Worker) UpdateResourceLimit(mcpu int64) {
+	clientSet = GetClientSet()
+
+	pod, err := clientSet.CoreV1().Pods("default").Get(context.Background(), w.podName, meta_v1.GetOptions{})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	for i, container := range pod.Spec.Containers {
+		if container.Name == w.podName {
+			log.Printf("Find container %v", container.Name)
+			pod.Spec.Containers[i].Resources.Limits.Cpu().SetMilli(mcpu)
+		}
+	}
+
+	_, err = clientSet.CoreV1().Pods("default").Update(context.Background(), pod, meta_v1.UpdateOptions{})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// wait until pod updated
+	err = wait.PollImmediate(500*time.Millisecond, 2*time.Minute, func() (bool, error) {
+		podFound, err := clientSet.CoreV1().Pods("default").Get(context.Background(),
+			pod.Name, meta_v1.GetOptions{})
+		if err != nil {
+			log.Panic(err)
+		}
+
+		if podFound.Status.Phase == corev1.PodRunning {
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	log.Printf("Pod %v: cpu limit has updated to %vm", pod.Name, mcpu)
+
 }
 
 // ResourceUsage
@@ -104,9 +218,11 @@ type ResourceUsage struct {
 	StorageEphemeral int64  `json:"StorageEphemeral"`
 	CollectedTime    string `json:"CollectedTime"`
 	Window           int64  `json:"Window"`
+	Available        bool   `json:"Available"`
+	PodName          string `json:"PodName"`
 }
 
-func QueryResourceUsage(podName string) ResourceUsage {
+func QueryResourceUsage(podName string) *ResourceUsage {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Panic(err)
@@ -119,17 +235,30 @@ func QueryResourceUsage(podName string) ResourceUsage {
 	metricsInterface := metricsClient.MetricsV1beta1().PodMetricses("default")
 
 	podMetrics, err := metricsInterface.Get(context.Background(), podName, meta_v1.GetOptions{})
-	if err != nil {
+	if errors.IsNotFound(err) {
+		log.Printf("Pod %v is not found", podName)
+		return &ResourceUsage{
+			CPU:              0,
+			Memory:           0,
+			Storage:          0,
+			StorageEphemeral: 0,
+			CollectedTime:    "Pod Not Found",
+			Window:           0,
+			Available:        false,
+		}
+	} else if err != nil {
 		log.Panic(err)
 	}
 
 	usage := podMetrics.Containers[0].Usage
-	return ResourceUsage{
+	return &ResourceUsage{
 		CPU:              usage.Cpu().MilliValue(),
 		Memory:           usage.Memory().MilliValue(),
 		Storage:          usage.Storage().MilliValue(),
 		StorageEphemeral: usage.StorageEphemeral().MilliValue(),
 		CollectedTime:    podMetrics.Timestamp.Time.String(),
 		Window:           podMetrics.Window.Duration.Milliseconds(),
+		Available:        true,
+		PodName:          podName,
 	}
 }

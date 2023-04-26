@@ -1,8 +1,18 @@
 package main
 
-var uniqueID int = 0
+import (
+	"strconv"
+	"sync"
+)
 
-func GetUniqueID() int {
+var uniqueID int = 0
+var idLock sync.Mutex
+
+func GetUniqueID() string {
+	var id int
+	idLock.Lock()
 	uniqueID++
-	return uniqueID
+	id = uniqueID
+	idLock.Unlock()
+	return strconv.Itoa(id)
 }

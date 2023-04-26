@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-func doMCMOT(worker *worker_pool.Worker, form *multipart.Form, taskID int) {
+func doMCMOT(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 
 	// submit MCMOT task to the worker_pool
 
@@ -26,7 +26,7 @@ func doMCMOT(worker *worker_pool.Worker, form *multipart.Form, taskID int) {
 		log.Panic(err)
 	}
 
-	if err := multipartWriter.WriteField("task_id", strconv.Itoa(taskID)); err != nil {
+	if err := multipartWriter.WriteField("task_id", taskID); err != nil {
 		log.Panic(err)
 	}
 
@@ -58,7 +58,7 @@ func MCMOTFinish(w http.ResponseWriter, r *http.Request) {
 		log.Panic(err)
 	}
 
-	form, err := multipartReader.ReadForm(100 * 1024 * 1024)
+	form, err := multipartReader.ReadForm(15 * 1024 * 1024)
 	taskID, err := strconv.Atoi(form.Value["task_id"][0])
 	if err != nil {
 		log.Panic(err)
@@ -69,15 +69,19 @@ func MCMOTFinish(w http.ResponseWriter, r *http.Request) {
 	notifier.(chan *multipart.Form) <- form
 }
 
-func SendBackMCMOT(r *http.Request, taskID int, worker *worker_pool.Worker) {
+func SendBackMCMOT(r *http.Request, taskID string, worker *worker_pool.Worker,
+	returnWorker, deleteWorker bool) {
 	notifier := make(chan *multipart.Form, 1)
 	taskFinishNotifier.Store(taskID, notifier)
 
 	go func(clientIP string) {
 		finishForm := <-notifier
+		taskFinishNotifier.Delete(taskID)
 
 		log.Printf("receive result of task id: %v", taskID)
-		worker.ReturnToPool(strconv.Itoa(taskID))
+		if returnWorker {
+			worker.ReturnToPool(taskID)
+		}
 
 		buffer := &bytes.Buffer{}
 		multipartWriter := multipart.NewWriter(buffer)
@@ -105,5 +109,7 @@ func SendBackMCMOT(r *http.Request, taskID int, worker *worker_pool.Worker) {
 		if err != nil {
 			log.Panic(err)
 		}
+
+		//worker.DeleteWorker()
 	}(r.RemoteAddr)
 }

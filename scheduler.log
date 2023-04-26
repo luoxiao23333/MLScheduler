@@ -1,10 +1,5 @@
-2023/03/23 10:19:58 Worker  192.168.1.101  Has been Registered
-2023/03/23 10:20:00 Worker  192.168.1.101  Has been Registered
-2023/03/23 10:20:09 Receive task mcmot, assigned id 1, worker_pool [IP: 192.168.1.101, Task Type: mcmot]
-2023/03/23 10:20:09 submit to 192.168.1.101
-2023/03/23 10:20:10 Receive task slam, assigned id 2, worker_pool [IP: 192.168.1.101, Task Type: slam]
-2023/03/23 10:20:10 submit to 192.168.1.101
-2023/03/23 10:21:09 receive result of task id: 2
-2023/03/23 10:21:09 result send back to http://192.168.1.102:8080/slam
-2023/03/23 10:26:52 receive result of task id: 1
-2023/03/23 10:26:52 result send back to http://192.168.1.102:8080/mcmot
+2023/04/24 14:53:37 Creating some workers... 
+&{map[controller:1000] map[controller:1] map[as1:1 controller:1]}
+2023/04/24 14:53:37 Creating some workers... 
+&{map[as1:1000] map[as1:1] map[as1:1 controller:1]}
+2023/04/24 14:53:37 unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined

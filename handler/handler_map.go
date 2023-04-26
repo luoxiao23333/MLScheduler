@@ -11,9 +11,10 @@ import (
 
 var taskFinishNotifier sync.Map
 
-type StartTask func(worker *worker_pool.Worker, form *multipart.Form, taskID int)
+type StartTask func(worker *worker_pool.Worker, form *multipart.Form, taskID string)
 type FinishTask func(w http.ResponseWriter, r *http.Request)
-type SendBackResult func(r *http.Request, taskID int, worker *worker_pool.Worker)
+type SendBackResult func(r *http.Request, taskID string, worker *worker_pool.Worker,
+	returnWorker, deleteWorker bool)
 
 type Handler struct {
 	StartTask
@@ -35,6 +36,11 @@ func GetHandler(taskName string) Handler {
 				StartTask:      doSlam,
 				FinishTask:     slamFinish,
 				SendBackResult: SendBackSlam,
+			},
+			"fusion": {
+				StartTask:      doFusion,
+				FinishTask:     fusionFinish,
+				SendBackResult: SendBackFusion,
 			},
 		}
 	}
