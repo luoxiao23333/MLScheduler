@@ -33,6 +33,8 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		handler.GetHandler("slam").FinishTask(w, req)
 	case "/fusion_finish":
 		handler.GetHandler("fusion").FinishTask(w, req)
+	case "/det_finish":
+		handler.GetHandler("det").FinishTask(w, req)
 	case "/update_cpu":
 		updateCPU(w, req)
 	case "/create_workers":
@@ -45,21 +47,6 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func RunHttpServer() {
-	/*
-		http.HandleFunc("/new_task", newTask)
-		http.HandleFunc("/worker_register", workerRegister)
-		http.HandleFunc("/query_metric", queryMetrics)
-		http.HandleFunc("/mcmot_finish", handler.GetHandler("mcmot").FinishTask)
-		http.HandleFunc("/slam_finish", handler.GetHandler("slam").FinishTask)
-		http.HandleFunc("/fusion_finish", handler.GetHandler("fusion").FinishTask)
-		http.HandleFunc("/update_cpu", updateCPU)
-		http.HandleFunc("/create_workers", createWorkers)
-
-		err := http.ListenAndServe(schedulerPort, nil)
-		if err != nil {
-			log.Panic(err)
-		}*/
-
 	server := &http.Server{
 		Addr:         schedulerPort,
 		ReadTimeout:  1 * time.Minute,
@@ -77,6 +64,8 @@ func RunHttpServer() {
 type CreateInfo struct {
 	CpuLimits     map[string]int `json:"cpu_limit"`
 	WorkerNumbers map[string]int `json:"worker_numbers"`
+	TaskName      string         `json:"task_name"`
+	GpuLimits     map[string]int `json:gpu_limit`
 	BatchSize     map[string]int
 }
 
@@ -95,9 +84,11 @@ func createWorkers(w http.ResponseWriter, r *http.Request) {
 	info.BatchSize = map[string]int{
 		"controller": 1,
 		"as1":        1,
+		"gpu1":       1,
 	}
 	log.Printf("Creating some workers... \n%v", info)
-	worker_pool.InitWorkers(info.WorkerNumbers, info.BatchSize, info.CpuLimits)
+	worker_pool.InitWorkers(info.WorkerNumbers, info.BatchSize, info.CpuLimits,
+		info.GpuLimits, info.TaskName)
 }
 
 func updateCPU(w http.ResponseWriter, r *http.Request) {

@@ -187,30 +187,34 @@ func GetWorkerByTaskID(taskID string) *Worker {
 	}
 }
 
-func InitWorkers(workerNumbers, batchSizes, cpuLimits map[string]int) []*Worker {
+func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits map[string]int,
+	taskName string) []*Worker {
 	var pool []*Worker
-	for _, taskName := range []string{"fusion"} {
-		wg := sync.WaitGroup{}
-		wg.Add(2)
-		for _, nodeName := range []string{"controller", "as1"} {
-			go func(nodeName string) {
-				for i := 0; i < workerNumbers[nodeName]; i++ {
-					podsInfo := PodsInfo[taskName+"-"+nodeName]
-					memLimit := "0"
-					cpuLimit := fmt.Sprintf("%vm", cpuLimits[nodeName])
-					worker := CreateWorker(podsInfo.TaskName, podsInfo.NodeName, podsInfo.HostName, cpuLimit, memLimit)
-					pool = append(pool, worker)
-					// slow down, too many slam init may make system down
-					if (i+1)%batchSizes[nodeName] == 0 {
-						log.Printf("Crated %v pods for %v", i+1, nodeName)
-						time.Sleep(30 * time.Second)
-					}
+	wg := sync.WaitGroup{}
+	wg.Add(len(workerNumbers))
+	for nodeName, workerNumber := range workerNumbers {
+		go func(nodeName string, workerNumber int) {
+			for i := 0; i < workerNumber; i++ {
+				podsInfo, ok := PodsInfo[taskName+"-"+nodeName]
+				if !ok {
+					log.Panicf("Unsupport combination %v", taskName+"-"+nodeName)
 				}
-				wg.Done()
-			}(nodeName)
-		}
-		wg.Wait()
+				memLimit := "0"
+				cpuLimit := fmt.Sprintf("%vm", cpuLimits[nodeName])
+				gpuLimit := strconv.Itoa(gpuLimits[nodeName])
+				worker := CreateWorker(podsInfo.TaskName, podsInfo.NodeName, podsInfo.HostName,
+					cpuLimit, memLimit, gpuLimit)
+				pool = append(pool, worker)
+				// slow down, too many slam init may make system down
+				if (i+1)%batchSizes[nodeName] == 0 {
+					log.Printf("Crated %v pods for %v", i+1, nodeName)
+					time.Sleep(30 * time.Second)
+				}
+			}
+			wg.Done()
+		}(nodeName, workerNumber)
 	}
+	wg.Wait()
 	return pool
 }
 

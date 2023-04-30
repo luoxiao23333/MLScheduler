@@ -60,6 +60,11 @@ var PodsInfo = map[string]podInfo{
 		NodeName: "controller",
 		HostName: "192.168.1.101",
 	},
+	"det-gpu1": {
+		TaskName: "det",
+		NodeName: "gpu1",
+		HostName: "192.168.1.106",
+	},
 }
 
 var clientSet *kubernetes.Clientset = nil
@@ -81,7 +86,8 @@ func GetClientSet() *kubernetes.Clientset {
 	return clientSet
 }
 
-func CreateWorker(taskName, nodeName, hostname, cpuLimit, memLimit string) *Worker {
+func CreateWorker(taskName, nodeName, hostname,
+	cpuLimit, memLimit, gpuLimit string) *Worker {
 	// create the Kubernetes client
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -120,6 +126,11 @@ func CreateWorker(taskName, nodeName, hostname, cpuLimit, memLimit string) *Work
 				Value: worker.port,
 			},
 		},
+	}
+
+	if gpuLimit == "1" {
+		log.Printf("Enable #%v gpu", gpuLimit)
+		container.Resources.Limits["nvidia.com/gpu"] = resource.MustParse(gpuLimit)
 	}
 
 	// define the pod

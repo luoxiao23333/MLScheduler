@@ -42,6 +42,11 @@ func GetHandler(taskName string) Handler {
 				FinishTask:     fusionFinish,
 				SendBackResult: SendBackFusion,
 			},
+			"det": {
+				StartTask:      doDET,
+				FinishTask:     detFinish,
+				SendBackResult: SendBackDET,
+			},
 		}
 	}
 
