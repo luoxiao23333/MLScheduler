@@ -1,6 +1,7 @@
 package worker_pool
 
 import (
+	"Scheduler/utils"
 	"context"
 	"fmt"
 	"log"
@@ -21,6 +22,7 @@ var containerMap = map[string]string{
 	"mcmot":  "docker.io/luoxiao23333/task_mcmot:v0",
 	"slam":   "docker.io/luoxiao23333/task_slam:v0",
 	"fusion": "docker.io/luoxiao23333/task_fusion:v0",
+	"det":    "docker.io/luoxiao23333/task_det:v0",
 }
 
 type podInfo struct {
@@ -87,7 +89,7 @@ func GetClientSet() *kubernetes.Clientset {
 }
 
 func CreateWorker(taskName, nodeName, hostname,
-	cpuLimit, memLimit, gpuLimit string) *Worker {
+	cpuLimit, memLimit, gpuLimit, gpuMemory string) *Worker {
 	// create the Kubernetes client
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -99,7 +101,7 @@ func CreateWorker(taskName, nodeName, hostname,
 	}
 
 	worker := addWorker(hostname, taskName, nodeName)
-	name := fmt.Sprintf("%v-%v-%v", taskName, worker.port, nodeName)
+	name := worker.GetWorkerName()
 	worker.podName = name
 
 	// define the container
@@ -125,34 +127,72 @@ func CreateWorker(taskName, nodeName, hostname,
 				Name:  "port",
 				Value: worker.port,
 			},
-		},
-	}
-
-	if gpuLimit == "1" {
-		log.Printf("Enable #%v gpu", gpuLimit)
-		container.Resources.Limits["nvidia.com/gpu"] = resource.MustParse(gpuLimit)
-	}
-
-	// define the pod
-	pod := &corev1.Pod{
-		ObjectMeta: meta_v1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				"worker": taskName,
+			{
+				Name:  "GPU_CORE_UTILIZATION_POLICY",
+				Value: "force",
 			},
 		},
-		Spec: corev1.PodSpec{
-			NodeName:    nodeName,
-			Containers:  []corev1.Container{container},
-			HostNetwork: true,
-		},
+	}
+	utils.DebugWithTimeWait(fmt.Sprintf("Must Parse is [%v]", resource.MustParse(cpuLimit)))
+	utils.DebugWithTimeWait(fmt.Sprintf("GPULIMIT is %v, cpu %v, mem %v", gpuLimit, cpuLimit, memLimit))
+	if gpuLimit != "0" {
+		log.Printf("Enable #%v gpu", gpuLimit)
+		container.Resources.Limits["nvidia.com/gpucores"] = resource.MustParse(gpuLimit)
+		container.Resources.Limits["nvidia.com/gpu"] = resource.MustParse("1")
+		container.Resources.Limits["nvidia.com/gpumem"] = resource.MustParse(gpuMemory)
+	}
+
+	utils.DebugWithTimeWait(fmt.Sprintf("Set GPU Limit completed\n container info is %v", container))
+
+	// define the pod
+	var pod *corev1.Pod
+	if gpuLimit != "0" {
+		pod = &corev1.Pod{
+			ObjectMeta: meta_v1.ObjectMeta{
+				Name: name,
+				Labels: map[string]string{
+					"worker": taskName,
+				},
+			},
+			Spec: corev1.PodSpec{
+				Containers:  []corev1.Container{container},
+				HostNetwork: true,
+			},
+		}
+	} else {
+		pod = &corev1.Pod{
+			ObjectMeta: meta_v1.ObjectMeta{
+				Name: name,
+				Labels: map[string]string{
+					"worker": taskName,
+				},
+			},
+			Spec: corev1.PodSpec{
+				NodeName:    nodeName,
+				Containers:  []corev1.Container{container},
+				HostNetwork: true,
+			},
+		}
+	}
+
+	if gpuLimit != "0" {
+		toleration := corev1.Toleration{
+			Key:      "nvidia.com/gpu",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		}
+
+		pod.Spec.Tolerations = []corev1.Toleration{toleration}
 	}
 
 	// create the pod
+	utils.DebugWithTimeWait("Before Created")
 	result, err := clientSet.CoreV1().Pods("default").Create(context.Background(), pod, meta_v1.CreateOptions{})
 	if err != nil {
-		panic(err.Error())
+		log.Panic(err)
 	}
+
+	utils.DebugWithTimeWait("PodCreated")
 
 	log.Printf("Creating pod %v in %v.\n", result.GetObjectMeta().GetName(), nodeName)
 
@@ -160,6 +200,8 @@ func CreateWorker(taskName, nodeName, hostname,
 	err = wait.PollImmediate(500*time.Millisecond, 2*time.Minute, func() (bool, error) {
 		podFound, err := clientSet.CoreV1().Pods("default").Get(context.Background(),
 			pod.Name, meta_v1.GetOptions{})
+
+		utils.DebugWithTimeWait(fmt.Sprintf("podFound is %v", podFound))
 		if err != nil {
 			return false, err
 		}
@@ -172,6 +214,7 @@ func CreateWorker(taskName, nodeName, hostname,
 	if err != nil {
 		log.Panic(err)
 	}
+	utils.DebugWithTimeWait("PodCreated Waiting End")
 
 	log.Printf("Pod Created!")
 	return worker
@@ -262,7 +305,8 @@ func QueryResourceUsage(podName string) *ResourceUsage {
 	}
 
 	usage := podMetrics.Containers[0].Usage
-	return &ResourceUsage{
+
+	resourceUsage := &ResourceUsage{
 		CPU:              usage.Cpu().MilliValue(),
 		Memory:           usage.Memory().MilliValue(),
 		Storage:          usage.Storage().MilliValue(),
@@ -272,4 +316,6 @@ func QueryResourceUsage(podName string) *ResourceUsage {
 		Available:        true,
 		PodName:          podName,
 	}
+
+	return resourceUsage
 }

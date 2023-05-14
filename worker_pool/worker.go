@@ -1,6 +1,7 @@
 package worker_pool
 
 import (
+	"Scheduler/utils"
 	"context"
 	"fmt"
 	"log"
@@ -34,6 +35,7 @@ type Worker struct {
 	podName     string
 	taskID      string
 	nodeName    string
+	wokerName   string
 }
 
 func (w *Worker) GetURL(route string) string {
@@ -71,21 +73,32 @@ func addWorker(hostName, taskType, nodeName string) *Worker {
 		port:        port,
 		isAvailable: true,
 		nodeName:    nodeName,
+		wokerName:   fmt.Sprintf("%v-%v-%v", taskType, port, nodeName),
 	}
 
-	workerPool, _ := WorkerMap.LoadOrStore(taskType, make(map[string]*Worker))
+	// map from task type to workerMap
+	// then map from workerName to specific Worker
+	workerPool, _ := WorkerMap.LoadOrStore(taskType, &map[string]*Worker{})
 
-	workerPool.(map[string]*Worker)[newWorker.nodeName] = newWorker
+	workerMap, _ := workerPool.(*map[string]*Worker)
+	(*workerMap)[newWorker.wokerName] = newWorker
+
 	workerSelectionLock.Unlock()
 
 	return newWorker
 }
 
-func OccupyWorker(taskType, taskID, nodeName string) *Worker {
-	rawPool, _ := WorkerMap.Load(taskType)
-	workerPool := rawPool.(map[string]*Worker)
+func (w *Worker) GetWorkerName() string {
+	return w.wokerName
+}
 
-	if len(workerPool) == 0 {
+func OccupyWorker(taskType, taskID, nodeName string) *Worker {
+	nodeName = PodsInfo[taskType+"-"+nodeName].NodeName
+
+	rawPool, _ := WorkerMap.Load(taskType)
+	workerPool := rawPool.(*map[string]*Worker)
+
+	if len(*workerPool) == 0 {
 		log.Panicf("task type %v has no worker_pool!", taskType)
 	}
 
@@ -93,17 +106,18 @@ func OccupyWorker(taskType, taskID, nodeName string) *Worker {
 	var chooseWorker *Worker = nil
 	for {
 		workerSelectionLock.Lock()
-		for podName, worker := range workerPool {
+		for podName, worker := range *workerPool {
 			if worker.isAvailable && worker.nodeName == nodeName {
 				chooseWorker = worker
-				workerPool[podName].isAvailable = false
+				(*workerPool)[podName].isAvailable = false
 				chooseWorker.bindTaskID(taskID)
+				break
 			}
 		}
 
 		if chooseWorker == nil {
 			log.Printf("Do not has support worker_pool for %v, has %v unavaliable workers, wait for 50 msec",
-				taskType, len(workerPool))
+				taskType, len(*workerPool))
 		} else {
 			workerSelectionLock.Unlock()
 			break
@@ -133,8 +147,8 @@ func (w *Worker) DeleteWorker() {
 		log.Panicf("Delete worker %v before return", w.nodeName)
 	}
 	rawPool, _ := WorkerMap.Load(w.taskType)
-	workerPool := rawPool.(map[string]*Worker)
-	delete(workerPool, w.nodeName)
+	workerPool := rawPool.(*map[string]*Worker)
+	delete(*workerPool, w.wokerName)
 	workerSelectionLock.Unlock()
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -187,7 +201,7 @@ func GetWorkerByTaskID(taskID string) *Worker {
 	}
 }
 
-func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits map[string]int,
+func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits, gpuMemorys map[string]int,
 	taskName string) []*Worker {
 	var pool []*Worker
 	wg := sync.WaitGroup{}
@@ -199,11 +213,20 @@ func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits map[string]int,
 				if !ok {
 					log.Panicf("Unsupport combination %v", taskName+"-"+nodeName)
 				}
+				utils.DebugWithTimeWait(fmt.Sprintf("podinfo:[%v]", podsInfo))
 				memLimit := "0"
-				cpuLimit := fmt.Sprintf("%vm", cpuLimits[nodeName])
+				var cpuLimit string
+				if cpuLimits[nodeName] != 0 {
+					cpuLimit = fmt.Sprintf("%vm", cpuLimits[nodeName])
+				} else {
+					cpuLimit = "0"
+				}
+				gpuMemory := strconv.Itoa(gpuMemorys[nodeName])
 				gpuLimit := strconv.Itoa(gpuLimits[nodeName])
+				utils.DebugWithTimeWait("Before CreateWorker")
 				worker := CreateWorker(podsInfo.TaskName, podsInfo.NodeName, podsInfo.HostName,
-					cpuLimit, memLimit, gpuLimit)
+					cpuLimit, memLimit, gpuLimit, gpuMemory)
+				utils.DebugWithTimeWait("After CreateWorker")
 				pool = append(pool, worker)
 				// slow down, too many slam init may make system down
 				if (i+1)%batchSizes[nodeName] == 0 {
