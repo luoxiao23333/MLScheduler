@@ -1,0 +1,2 @@
+v2: test complete task
+v3: change map to sync.Map in worker.go

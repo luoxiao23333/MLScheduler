@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/pprof"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,8 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		updateCPU(w, req)
 	case "/create_workers":
 		createWorkers(w, req)
+	case "/restart":
+		restart(w, req)
 	case "/debug/pprof/profile":
 		pprof.Profile(w, req)
 	default:
@@ -78,6 +81,12 @@ type CreateInfo struct {
 	GpuLimits     map[string]int `json:"gpu_limit"`
 	GpuMemory     map[string]int `json:"gpu_memory"`
 	BatchSize     map[string]int
+}
+
+func restart(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("OK"))
+	r.Body.Close()
+	os.Exit(0)
 }
 
 func createWorkers(w http.ResponseWriter, r *http.Request) {
