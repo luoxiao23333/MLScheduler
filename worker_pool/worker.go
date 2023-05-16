@@ -77,11 +77,12 @@ func addWorker(hostName, taskType, nodeName string) *Worker {
 	}
 
 	// map from task type to workerMap
-	// then map from workerName to specific Worker
-	workerPool, _ := WorkerMap.LoadOrStore(taskType, &map[string]*Worker{})
+	// the value of workerMap is a
+	// map from workerName(string) to specific Worker(*Worker) map[string]*Worker{}
+	workerPool, _ := WorkerMap.LoadOrStore(taskType, sync.Map{})
 
-	workerMap, _ := workerPool.(*map[string]*Worker)
-	(*workerMap)[newWorker.wokerName] = newWorker
+	workerMap, _ := workerPool.(sync.Map)
+	workerMap.Store(newWorker.wokerName, newWorker)
 
 	workerSelectionLock.Unlock()
 
@@ -96,9 +97,15 @@ func OccupyWorker(taskType, taskID, nodeName string) *Worker {
 	nodeName = PodsInfo[taskType+"-"+nodeName].NodeName
 
 	rawPool, _ := WorkerMap.Load(taskType)
-	workerPool := rawPool.(*map[string]*Worker)
+	workerPool := rawPool.(sync.Map)
 
-	if len(*workerPool) == 0 {
+	hasWorker := false
+	workerPool.Range(func(key, value any) bool {
+		hasWorker = true
+		return false
+	})
+
+	if !hasWorker {
 		log.Panicf("task type %v has no worker_pool!", taskType)
 	}
 
@@ -106,18 +113,21 @@ func OccupyWorker(taskType, taskID, nodeName string) *Worker {
 	var chooseWorker *Worker = nil
 	for {
 		workerSelectionLock.Lock()
-		for podName, worker := range *workerPool {
+		workerPool.Range(func(key, value any) bool {
+			worker := value.(*Worker)
 			if worker.isAvailable && worker.nodeName == nodeName {
 				chooseWorker = worker
-				(*workerPool)[podName].isAvailable = false
-				chooseWorker.bindTaskID(taskID)
-				break
+				worker.isAvailable = false
+				worker.bindTaskID(taskID)
+				return false
+			} else {
+				return true
 			}
-		}
+		})
 
 		if chooseWorker == nil {
-			log.Printf("Do not has support worker_pool for %v, has %v unavaliable workers, wait for 50 msec",
-				taskType, len(*workerPool))
+			log.Printf("Do not has support worker_pool for %v, wait for 50 msec",
+				taskType)
 		} else {
 			workerSelectionLock.Unlock()
 			break
@@ -147,8 +157,8 @@ func (w *Worker) DeleteWorker() {
 		log.Panicf("Delete worker %v before return", w.nodeName)
 	}
 	rawPool, _ := WorkerMap.Load(w.taskType)
-	workerPool := rawPool.(*map[string]*Worker)
-	delete(*workerPool, w.wokerName)
+	workerPool := rawPool.(sync.Map)
+	workerPool.Delete(w.wokerName)
 	workerSelectionLock.Unlock()
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -243,11 +253,13 @@ func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits, gpuMemorys map
 
 func GetWorkerPool(taskType string) []*Worker {
 	rawPool, _ := WorkerMap.Load(taskType)
-	workerPool := rawPool.(map[string]*Worker)
+	workerPool := rawPool.(sync.Map)
 	var pool []*Worker
-	for _, worker := range workerPool {
+	workerPool.Range(func(key, value any) bool {
+		worker := value.(*Worker)
 		pool = append(pool, worker)
-	}
+		return true
+	})
 	return pool
 }
 
