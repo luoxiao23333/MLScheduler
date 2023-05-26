@@ -8,12 +8,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func doDET(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 
 	// submit det task to the worker_pool
-	log.Printf("submit to %v", worker.GetIP())
+	//log.Printf("submit to %v", worker.GetIP())
 
 	workerURL := worker.GetURL("run_task")
 
@@ -42,7 +43,7 @@ func doDET(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 	}
 
 	frameBytes, err := io.ReadAll(file)
-	log.Printf("Receive bytes %v", len(frameBytes))
+	//log.Printf("Receive bytes %v", len(frameBytes))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -52,8 +53,8 @@ func doDET(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 		log.Panic(err)
 	}
 
-	n, err := writer.Write(frameBytes)
-	log.Printf("Write %v bytes. Buffer size is %v", n, postBody.Cap())
+	_, err = writer.Write(frameBytes)
+	//log.Printf("Write %v bytes. Buffer size is %v", n, postBody.Cap())
 	if err != nil {
 		log.Panic(err)
 	}
@@ -84,7 +85,7 @@ func detFinish(w http.ResponseWriter, r *http.Request) {
 		log.Panic(err)
 	}
 
-	form, err := multipartReader.ReadForm(15 * 1024 * 1024)
+	form, err := multipartReader.ReadForm(2 * 1024 * 1024)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -104,10 +105,12 @@ func detFinish(w http.ResponseWriter, r *http.Request) {
 func SendBackDET(r *http.Request, taskID string, worker *worker_pool.Worker,
 	returnWorker, deleteWorker bool) {
 	go func(clientIP string) {
+		now := time.Now()
 		notifier, _ := taskFinishNotifier.Load(taskID)
 		finishForm := <-notifier.(chan *multipart.Form)
 		close((notifier.(chan *multipart.Form)))
 		taskFinishNotifier.Delete(taskID)
+		log.Printf("Notified %v", time.Since(now))
 
 		if returnWorker {
 			workerURL := worker.GetURL("run_task")

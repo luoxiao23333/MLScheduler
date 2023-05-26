@@ -79,10 +79,12 @@ func addWorker(hostName, taskType, nodeName string) *Worker {
 	// map from task type to workerMap
 	// the value of workerMap is a
 	// map from workerName(string) to specific Worker(*Worker) map[string]*Worker{}
-	workerPool, _ := WorkerMap.LoadOrStore(taskType, sync.Map{})
+	workerPool, _ := WorkerMap.LoadOrStore(taskType, &sync.Map{})
 
-	workerMap, _ := workerPool.(sync.Map)
-	workerMap.Store(newWorker.wokerName, newWorker)
+	workerMap, _ := workerPool.(*sync.Map)
+	(*workerMap).Store(newWorker.wokerName, newWorker)
+
+	log.Printf("worker has been store [%v] in task type %v", *newWorker, taskType)
 
 	workerSelectionLock.Unlock()
 
@@ -96,11 +98,14 @@ func (w *Worker) GetWorkerName() string {
 func OccupyWorker(taskType, taskID, nodeName string) *Worker {
 	nodeName = PodsInfo[taskType+"-"+nodeName].NodeName
 
-	rawPool, _ := WorkerMap.Load(taskType)
-	workerPool := rawPool.(sync.Map)
+	rawPool, ok := WorkerMap.Load(taskType)
+	if !ok {
+		log.Panicf("Not have task type %v of worker pool", taskType)
+	}
+	workerPool := rawPool.(*sync.Map)
 
 	hasWorker := false
-	workerPool.Range(func(key, value any) bool {
+	(*workerPool).Range(func(key, value any) bool {
 		hasWorker = true
 		return false
 	})
@@ -113,8 +118,10 @@ func OccupyWorker(taskType, taskID, nodeName string) *Worker {
 	var chooseWorker *Worker = nil
 	for {
 		workerSelectionLock.Lock()
-		workerPool.Range(func(key, value any) bool {
+		(*workerPool).Range(func(key, value any) bool {
 			worker := value.(*Worker)
+			log.Printf("This worker is [%v], expected nodeName is [%v]",
+				*worker, nodeName)
 			if worker.isAvailable && worker.nodeName == nodeName {
 				chooseWorker = worker
 				worker.isAvailable = false
@@ -157,8 +164,8 @@ func (w *Worker) DeleteWorker() {
 		log.Panicf("Delete worker %v before return", w.nodeName)
 	}
 	rawPool, _ := WorkerMap.Load(w.taskType)
-	workerPool := rawPool.(sync.Map)
-	workerPool.Delete(w.wokerName)
+	workerPool := rawPool.(*sync.Map)
+	(*workerPool).Delete(w.wokerName)
 	workerSelectionLock.Unlock()
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -206,7 +213,7 @@ func GetWorkerByTaskID(taskID string) *Worker {
 	if ok {
 		return worker.(*Worker)
 	} else {
-		log.Panic("worker with taskID %v does not exist!!!", taskID)
+		log.Panicf("worker with taskID %v does not exist!!!", taskID)
 		return nil
 	}
 }
@@ -253,9 +260,9 @@ func InitWorkers(workerNumbers, batchSizes, cpuLimits, gpuLimits, gpuMemorys map
 
 func GetWorkerPool(taskType string) []*Worker {
 	rawPool, _ := WorkerMap.Load(taskType)
-	workerPool := rawPool.(sync.Map)
+	workerPool := rawPool.(*sync.Map)
 	var pool []*Worker
-	workerPool.Range(func(key, value any) bool {
+	(*workerPool).Range(func(key, value any) bool {
 		worker := value.(*Worker)
 		pool = append(pool, worker)
 		return true

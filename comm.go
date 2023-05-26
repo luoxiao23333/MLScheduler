@@ -28,7 +28,7 @@ const (
 type router struct{}
 
 func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	log.Printf("Receive Path: [%v]", req.URL.Path)
+	//log.Printf("Receive Path: [%v]", req.URL.Path)
 	switch req.URL.Path {
 	case "/new_task":
 		newTask(w, req)
@@ -203,6 +203,13 @@ func completeTask(w http.ResponseWriter, r *http.Request) {
 	} else {
 		detWorker = worker_pool.GetWorkerByTaskID(taskInfo.DETTaskID)
 		fusionWorker = worker_pool.GetWorkerByTaskID(taskInfo.FusionTaskID)
+
+		if detWorker == nil || fusionWorker == nil {
+			log.Printf("Maybe work not complete before delete, occationally internal bugs")
+			w.Write([]byte("Failed"))
+			return
+		}
+
 		detTaskID = taskInfo.DETTaskID
 		fusionTaskID = taskInfo.FusionTaskID
 	}
@@ -266,8 +273,7 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 		taskID = utils.GetUniqueID()
 		// TODO Make Decision Here, Apply True Resource Allocation
 		// Default Round Robin and Allocate Expected Resource
-		podsInfo := worker_pool.PodsInfo[taskName+"-"+nodeName]
-		worker = worker_pool.OccupyWorker(taskName, taskID, podsInfo.NodeName)
+		worker = worker_pool.OccupyWorker(taskName, taskID, nodeName)
 		//worker := worker_pool.CreateWorker(podsInfo.TaskName, podsInfo.NodeName, podsInfo.HostName, cpuLimit)
 		//worker.bindTaskID(strconv.Itoa(taskID))
 		returnWorker = false
@@ -290,7 +296,9 @@ func newTask(w http.ResponseWriter, r *http.Request) {
 	deleteWorker := len(form.Value["delete"]) != 0
 
 	handlers := handler.GetHandler(taskName)
+	now := time.Now()
 	handlers.StartTask(worker, form, taskID)
+	log.Printf("New Task start task %v", time.Since(now))
 	handlers.SendBackResult(r, taskID, worker, returnWorker, deleteWorker)
 
 	_, err = w.Write([]byte(taskID))

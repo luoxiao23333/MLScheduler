@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 const STATUS_LAST = "Last"
@@ -27,6 +28,13 @@ type CompleteTaskHandler struct {
 	deleteFusionWorker bool
 
 	clientAddress string
+
+	slamIOLatency      time.Duration
+	slamComputeLatency time.Duration
+	detIOLatency       time.Duration
+	detComputeLatency  time.Duration
+	fusionLatency      time.Duration
+	totalLatency       time.Duration
 }
 
 func NewCompleteTaskHandler(
@@ -55,6 +63,9 @@ func NewCompleteTaskHandler(
 func (handler *CompleteTaskHandler) SendTask() {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
+
+	totalTick := time.Now()
+
 	var detResult string
 	go func() {
 		// start det and get det result
@@ -63,8 +74,10 @@ func (handler *CompleteTaskHandler) SendTask() {
 	}()
 
 	go func() {
+		now := time.Now()
 		// trigger localization
 		handler.startLocalization()
+		handler.slamIOLatency = time.Since(now)
 		wg.Done()
 	}()
 
@@ -73,12 +86,13 @@ func (handler *CompleteTaskHandler) SendTask() {
 	// send det result to the fusion, fusion worker will complete
 	// localization first, then do fusion, then sendback result
 	fusionResult := handler.sendDETResultToFusion(detResult)
+	handler.totalLatency = time.Since(totalTick)
 
 	handler.sendBackToClient(fusionResult)
 }
 
 func (handler *CompleteTaskHandler) startLocalization() {
-	log.Printf("submit to %v", handler.fusionWorker.GetIP())
+	//log.Printf("submit to %v", handler.fusionWorker.GetIP())
 
 	workerURL := handler.fusionWorker.GetURL("run_task")
 
@@ -114,13 +128,13 @@ func (handler *CompleteTaskHandler) startLocalization() {
 	}
 
 	frameBytes, err := io.ReadAll(file)
-	log.Printf("Receive bytes %v", len(frameBytes))
+	//log.Printf("Receive bytes %v", len(frameBytes))
 	if err != nil {
 		log.Panic(err)
 	}
 
-	n, err := writer.Write(frameBytes)
-	log.Printf("Write %v bytes. Buffer size is %v", n, postBody.Cap())
+	_, err = writer.Write(frameBytes)
+	//log.Printf("Write %v bytes. Buffer size is %v", n, postBody.Cap())
 	if err != nil {
 		log.Panic(err)
 	}
@@ -144,12 +158,13 @@ func (handler *CompleteTaskHandler) startLocalization() {
 }
 
 func (handler *CompleteTaskHandler) sendToDET() string {
+	now := time.Now()
 	detHandler := GetHandler("det")
 	detHandler.StartTask(handler.detWorker, handler.form, handler.detTaskID)
+	handler.detIOLatency = time.Since(now)
 
 	notifier, _ := taskFinishNotifier.Load(handler.detTaskID)
 	finishForm := <-notifier.(chan *multipart.Form)
-	close((notifier.(chan *multipart.Form)))
 	taskFinishNotifier.Delete(handler.detTaskID)
 
 	if handler.status == STATUS_LAST {
@@ -191,15 +206,21 @@ func (handler *CompleteTaskHandler) sendToDET() string {
 		log.Printf("det worker deleted")
 	}
 
-	log.Printf("receive result of task id: %v.task id is %v, det_result is %v",
-		handler.detTaskID, len(finishForm.Value["task_id"]), len(finishForm.Value["det_result"]))
+	var err error
+	handler.detComputeLatency, err = time.ParseDuration(finishForm.Value["det_latency"][0])
+	if err != nil {
+		log.Panic(err)
+	}
+
+	//log.Printf("receive result of task id: %v.task id is %v, det_result is %v",
+	//handler.detTaskID, len(finishForm.Value["task_id"]), len(finishForm.Value["det_result"]))
 
 	return finishForm.Value["det_result"][0]
 }
 
 func (handler *CompleteTaskHandler) sendDETResultToFusion(detResult string) string {
 	// submit fusion task to the worker_pool
-	log.Printf("submit to %v", handler.fusionWorker.GetIP())
+	//log.Printf("submit to %v", handler.fusionWorker.GetIP())
 
 	workerURL := handler.fusionWorker.GetURL("run_task")
 
@@ -246,6 +267,18 @@ func (handler *CompleteTaskHandler) sendDETResultToFusion(detResult string) stri
 	finishForm := <-notifier
 	if len(finishForm.Value["fusion_result"]) != 1 {
 		log.Panicf("len of fusion result is %v", len(finishForm.Value["fusion_result"]))
+	}
+
+	log.Println("Fusion Notified!")
+
+	handler.slamComputeLatency, err = time.ParseDuration(finishForm.Value["slam_latency"][0])
+	if err != nil {
+		log.Panic(err)
+	}
+
+	handler.fusionLatency, err = time.ParseDuration(finishForm.Value["fusion_latency"][0])
+	if err != nil {
+		log.Panic(err)
 	}
 
 	if handler.status == STATUS_LAST {
@@ -306,6 +339,19 @@ func (handler *CompleteTaskHandler) sendBackToClient(fusionResult string) {
 		log.Panic(err)
 	}
 
+	writeLatency := func(fieldName string, latency time.Duration) {
+		if err := multipartWriter.WriteField(fieldName, latency.String()); err != nil {
+			log.Panic(err)
+		}
+	}
+
+	writeLatency("slam_compute_latency", handler.slamComputeLatency)
+	writeLatency("slam_io_latency", handler.slamIOLatency)
+	writeLatency("det_compute_latency", handler.detComputeLatency)
+	writeLatency("det_io_latency", handler.detIOLatency)
+	writeLatency("fusion_latency", handler.fusionLatency)
+	writeLatency("total_latency", handler.totalLatency)
+
 	err := multipartWriter.Close()
 	if err != nil {
 		log.Panic(err)
@@ -315,7 +361,7 @@ func (handler *CompleteTaskHandler) sendBackToClient(fusionResult string) {
 	clientIP := "http://" + strings.Split(handler.clientAddress, ":")[0]
 	resultAddress := clientIP + ":8080/complete_task"
 
-	log.Printf("result send back to %v", resultAddress)
+	//log.Printf("result send back to %v", resultAddress)
 
 	_, err = http.Post(resultAddress, multipartWriter.FormDataContentType(), buffer)
 	if err != nil {

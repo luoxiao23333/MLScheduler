@@ -13,7 +13,7 @@ import (
 func doFusion(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 
 	// submit fusion task to the worker_pool
-	log.Printf("submit to %v", worker.GetIP())
+	//log.Printf("submit to %v", worker.GetIP())
 
 	workerURL := worker.GetURL("run_task")
 
@@ -45,7 +45,7 @@ func doFusion(worker *worker_pool.Worker, form *multipart.Form, taskID string) {
 	}
 
 	frameBytes, err := io.ReadAll(file)
-	log.Printf("Receive bytes %v", len(frameBytes))
+	//log.Printf("Receive bytes %v", len(frameBytes))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -87,7 +87,7 @@ func fusionFinish(w http.ResponseWriter, r *http.Request) {
 		log.Panic(err)
 	}
 
-	form, err := multipartReader.ReadForm(15 * 1024 * 1024)
+	form, err := multipartReader.ReadForm(2 * 1024 * 1024)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -99,7 +99,12 @@ func fusionFinish(w http.ResponseWriter, r *http.Request) {
 
 	taskID := form.Value["task_id"][0]
 
-	notifier, _ := taskFinishNotifier.Load(taskID)
+	log.Printf("Receive from task id %v", taskID)
+
+	notifier, ok := taskFinishNotifier.Load(taskID)
+	if !ok {
+		log.Panicf("notified with task id %v is not stored", taskID)
+	}
 
 	notifier.(chan *multipart.Form) <- form
 }
